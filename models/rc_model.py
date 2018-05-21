@@ -126,6 +126,8 @@ class RCModel(object):
         self.q_length = tf.placeholder(tf.int32, [None])
         self.start_label = tf.placeholder(tf.int32, [None])
         self.end_label = tf.placeholder(tf.int32, [None])
+        self.p_id_label = tf.placeholder(tf.int32, [None])
+
         self.dropout_keep_prob = tf.placeholder(tf.float32)
 
     def _embed(self):
@@ -330,26 +332,23 @@ class RCModel(object):
 
         with tf.variable_scope("Output_Layer"):
             batch_size = tf.shape(self.start_label)[0]
-            self.enc[1] = tf.reshape(self.enc[1], [batch_size, -1, self.hidden_size])
-            self.enc[2] = tf.reshape(self.enc[2], [batch_size, -1, self.hidden_size])
-            self.enc[3] = tf.reshape(self.enc[3], [batch_size, -1, self.hidden_size])
-            p_mask = tf.reshape(self.p_mask, [batch_size, -1])
+            #self.enc[1] = tf.reshape(self.enc[1], [batch_size, -1, self.hidden_size])
+            #self.enc[2] = tf.reshape(self.enc[2], [batch_size, -1, self.hidden_size])
+            #self.enc[3] = tf.reshape(self.enc[3], [batch_size, -1, self.hidden_size])
+            #p_mask = tf.reshape(self.p_mask, [batch_size, -1])
             start_logits = tf.squeeze(
                 cnn_layer.conv(tf.concat([self.enc[1], self.enc[2]], axis=-1), 1, bias=False, name="start_pointer"),
                 -1)  # [batch, p_len]
             end_logits = tf.squeeze(
                 cnn_layer.conv(tf.concat([self.enc[1], self.enc[3]], axis=-1), 1, bias=False, name="end_pointer"),
                 -1)  # [batch, p_len]
-            self.logits = [cnn_layer.mask_logits(start_logits, mask=p_mask),
-                           cnn_layer.mask_logits(end_logits, mask=p_mask)]
+            self.logits = [cnn_layer.mask_logits(start_logits, mask=self.p_mask),
+                           cnn_layer.mask_logits(end_logits, mask=self.p_mask)]
 
             self.start_probs, self.end_probs = [l for l in self.logits]
-
-            #temp_p_emb = tf.nn.embedding_lookup(self.word_embeddings, self.p)
-            #temp_q_emb = tf.nn.embedding_lookup(self.word_embeddings, self.q)
+            '''
             temp_p_emb = self.p_word_emb
             temp_q_emb = self.q_word_emb
-
 
             self.norm_p_emb = temp_p_emb / tf.sqrt(tf.reduce_sum(temp_p_emb*temp_p_emb, -1, keep_dims=True))
             self.norm_q_emb = temp_q_emb / tf.sqrt(tf.reduce_sum(temp_q_emb*temp_q_emb, -1, keep_dims=True))
@@ -361,15 +360,26 @@ class RCModel(object):
             w = tf.constant([0, 0, 1, 0.8, 0.6], shape=[5, 1, 1], dtype=tf.float32)
             probs = tf.nn.conv1d(output, w, stride=1, padding="SAME")  # [batch, p_len, 1]
             self.prio_probs = tf.nn.softmax(tf.squeeze(probs, 2), -1)
+            '''
+
+            outer = tf.matmul(tf.expand_dims(tf.nn.softmax(self.start_probs), axis=2),
+                              tf.expand_dims(tf.nn.softmax(self.end_probs), axis=1)) #[batch, p_len, p_len]
+            outer = tf.matrix_band_part(outer, 0, self.max_a_len)
+
+            max_prob = tf.reduce_max(outer, [1, 2])
+            max_prob = tf.reshape(max_prob, [batch_size, -1]) #[batch, 5]
+            self.predict_id_probs = tf.nn.softmax(max_prob, -1)
+            self.predict_p_ids = tf.argmax(self.predict_id_probs, axis=1)#[batch]
+
+            self.yp1 = tf.argmax(tf.reduce_max(outer, axis=2), axis=1) #[batch]
+            self.yp2 = tf.argmax(tf.reduce_max(outer, axis=1), axis=1) #[batch]
+            self.yp1 = tf.reshape(self.yp1, [batch_size, -1])
+            self.yp2 = tf.reshape(self.yp2, [batch_size, -1])
 
             self.start_probs = tf.nn.softmax(self.start_probs, -1)
             self.end_probs = tf.nn.softmax(self.end_probs, -1)
-            
-            outer = tf.matmul(tf.expand_dims(tf.nn.softmax(self.start_probs), axis=2),
-                              tf.expand_dims(tf.nn.softmax(self.end_probs), axis=1))
-            outer = tf.matrix_band_part(outer, 0, -1)
-            self.yp1 = tf.argmax(tf.reduce_max(outer, axis=2), axis=1)
-            self.yp2 = tf.argmax(tf.reduce_max(outer, axis=1), axis=1)
+            self.start_probs = tf.reshape(self.start_probs, [batch_size, -1])
+            self.end_probs = tf.reshape(self.end_probs, [batch_size, -1])
 
     def _compute_loss(self):
         """
@@ -387,8 +397,11 @@ class RCModel(object):
 
         self.start_loss = sparse_nll_loss(probs=self.start_probs, labels=self.start_label)
         self.end_loss = sparse_nll_loss(probs=self.end_probs, labels=self.end_label)
+        self.id_loss = sparse_nll_loss(probs=self.predict_id_probs, labels=self.p_id_label)
+
         self.all_params = tf.trainable_variables()
         self.loss = tf.reduce_mean(tf.add(self.start_loss, self.end_loss))
+        self.loss = self.loss + 10 * tf.reduce_mean(self.id_loss)
         if self.weight_decay > 0:
             with tf.variable_scope('l2_loss'):
                 l2_loss = tf.add_n([tf.nn.l2_loss(v) for v in self.all_params])
@@ -429,6 +442,7 @@ class RCModel(object):
                          self.q_length: batch['question_length'],
                          self.start_label: batch['start_id'],
                          self.end_label: batch['end_id'],
+                         self.p_id_label: batch['p_id'],
                          self.dropout_keep_prob: dropout_keep_prob}
             _, loss = self.sess.run([self.train_op, self.loss], feed_dict)
             total_loss += loss * len(batch['raw_data'])
@@ -498,17 +512,16 @@ class RCModel(object):
                          self.q_length: batch['question_length'],
                          self.start_label: batch['start_id'],
                          self.end_label: batch['end_id'],
+                         self.p_id_label: batch['p_id'],
                          self.dropout_keep_prob: 1.0}
-            start_probs, end_probs, loss = self.sess.run([self.start_probs,
-                                                          self.end_probs, self.loss], feed_dict)
+            p_ids, yp1, yp2, loss = self.sess.run([self.predict_p_ids, self.yp1, self.yp2, self.loss], feed_dict)
 
             total_loss += loss * len(batch['raw_data'])
             total_num += len(batch['raw_data'])
 
             padded_p_len = len(batch['passage_token_ids'][0])
-            for sample, start_prob, end_prob in zip(batch['raw_data'], start_probs, end_probs):
-
-                best_answer = self.find_best_answer(sample, start_prob, end_prob, padded_p_len)
+            for sample, p_id, start, end in zip(batch['raw_data'], p_ids, yp1, yp2):
+                best_answer = self.find_best_answer(sample, p_id, start[p_id], end[p_id], padded_p_len)
                 if save_full_info:
                     sample['pred_answers'] = [best_answer]
                     pred_answers.append(sample)
@@ -548,51 +561,14 @@ class RCModel(object):
             bleu_rouge = None
         return ave_loss, bleu_rouge
 
-    def find_best_answer(self, sample, start_prob, end_prob, padded_p_len):
+    def find_best_answer(self, sample, p_id, start, end, padded_p_len):
         """
         Finds the best answer for a sample given start_prob and end_prob for each position.
         This will call find_best_answer_for_passage because there are multiple passages in a sample
         """
-        best_p_idx, best_span, best_score = None, None, 0
-        for p_idx, passage in enumerate(sample['passages']):
-            if p_idx >= self.max_p_num:
-                continue
-            passage_len = min(self.max_p_len, len(passage['passage_tokens']))
-            answer_span, score = self.find_best_answer_for_passage(
-                start_prob[p_idx * padded_p_len: (p_idx + 1) * padded_p_len],
-                end_prob[p_idx * padded_p_len: (p_idx + 1) * padded_p_len],
-                passage_len)
-            if score > best_score:
-                best_score = score
-                best_p_idx = p_idx
-                best_span = answer_span
-        if best_p_idx is None or best_span is None:
-            best_answer = ''
-        else:
-            best_answer = ''.join(
-                sample['passages'][best_p_idx]['passage_tokens'][best_span[0]: best_span[1] + 1])
+        best_answer = ''.join(
+            sample['passages'][p_id]['passage_tokens'][start: end+1])
         return best_answer
-
-    def find_best_answer_for_passage(self, start_probs, end_probs, passage_len=None):
-        """
-        Finds the best answer with the maximum start_prob * end_prob from a single passage
-        """
-        if passage_len is None:
-            passage_len = len(start_probs)
-        else:
-            passage_len = min(len(start_probs), passage_len)
-        best_start, best_end, max_prob = -1, -1, 0
-        for start_idx in range(passage_len):
-            for ans_len in range(self.max_a_len):
-                end_idx = start_idx + ans_len
-                if end_idx >= passage_len:
-                    continue
-                prob = start_probs[start_idx] * end_probs[end_idx]
-                if prob > max_prob:
-                    best_start = start_idx
-                    best_end = end_idx
-                    max_prob = prob
-        return (best_start, best_end), max_prob
 
     def save(self, model_dir, model_prefix):
         """
