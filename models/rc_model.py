@@ -187,9 +187,9 @@ class RCModel(object):
         Employs two Bi-LSTMs to encode passage and question separately
         """
         with tf.variable_scope('passage_encoding'):
-            self.sep_p_encodes, _ = rnn('bi-lstm', self.p_emb, self.p_length, self.hidden_size*2)
+            self.sep_p_encodes, _ = rnn('bi-lstm', self.p_emb, self.p_length, self.hidden_size)
         with tf.variable_scope('question_encoding'):
-            self.sep_q_encodes, _ = rnn('bi-lstm', self.q_emb, self.q_length, self.hidden_size*2)
+            self.sep_q_encodes, _ = rnn('bi-lstm', self.q_emb, self.q_length, self.hidden_size)
         if self.use_dropout:
             self.sep_p_encodes = tf.nn.dropout(self.sep_p_encodes, self.dropout_keep_prob)
             self.sep_q_encodes = tf.nn.dropout(self.sep_q_encodes, self.dropout_keep_prob)
@@ -345,10 +345,16 @@ class RCModel(object):
 
             self.start_probs, self.end_probs = [l for l in self.logits]
 
-            self.norm_p_emb = self.p_emb / tf.sqrt(tf.reduce_sum(self.p_emb*self.p_emb, -1, keep_dims=True))
-            self.norm_q_emb = self.q_emb / tf.sqrt(tf.reduce_sum(self.q_emb*self.q_emb, -1, keep_dims=True))
+            #temp_p_emb = tf.nn.embedding_lookup(self.word_embeddings, self.p)
+            #temp_q_emb = tf.nn.embedding_lookup(self.word_embeddings, self.q)
+            temp_p_emb = self.p_word_emb
+            temp_q_emb = self.q_word_emb
 
-            self.sim = tf.matmul(self.norm_p_emb, self.norm_p_emb, transpose_b=True)
+
+            self.norm_p_emb = temp_p_emb / tf.sqrt(tf.reduce_sum(temp_p_emb*temp_p_emb, -1, keep_dims=True))
+            self.norm_q_emb = temp_q_emb / tf.sqrt(tf.reduce_sum(temp_q_emb*temp_q_emb, -1, keep_dims=True))
+
+            self.sim = tf.matmul(self.norm_p_emb, self.norm_q_emb, transpose_b=True)
 
             output = tf.reduce_max(self.sim, -1)  # [batch, p_len]
             output = tf.expand_dims(tf.sigmoid(output), -1)  # [batch, p_len, 1]
