@@ -114,7 +114,15 @@ class Demo(object):
                              model.end_label: end_id,
                              model.dropout_keep_prob: config.dropout_keep_prob}
 
-                yp1, yp2 = model.sess.run([model.yp1, model.yp2], feed_dict = feed_dict)
+                yp1, yp2, sim, probs, start_probs, end_probs = model.sess.run([model.yp1, model.yp2, model.sim, model.prio_probs, model.start_probs, model.end_probs], feed_dict=feed_dict)
+                print("debug sim")
+                print(sim)
+                print("debug prio_probs")
+                print(probs)
+                print("debug start_prob")
+                print(start_probs)
+                print("debug end_prob")
+                print(end_probs)
                 yp2[0] += 1
                 response = "".join(context[yp1[0]:yp2[0]])
                 query = []

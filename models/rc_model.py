@@ -187,9 +187,9 @@ class RCModel(object):
         Employs two Bi-LSTMs to encode passage and question separately
         """
         with tf.variable_scope('passage_encoding'):
-            self.sep_p_encodes, _ = rnn('bi-lstm', self.p_emb, self.p_length, self.hidden_size)
+            self.sep_p_encodes, _ = rnn('bi-lstm', self.p_emb, self.p_length, self.hidden_size*2)
         with tf.variable_scope('question_encoding'):
-            self.sep_q_encodes, _ = rnn('bi-lstm', self.q_emb, self.q_length, self.hidden_size)
+            self.sep_q_encodes, _ = rnn('bi-lstm', self.q_emb, self.q_length, self.hidden_size*2)
         if self.use_dropout:
             self.sep_p_encodes = tf.nn.dropout(self.sep_p_encodes, self.dropout_keep_prob)
             self.sep_q_encodes = tf.nn.dropout(self.sep_q_encodes, self.dropout_keep_prob)
@@ -312,6 +312,20 @@ class RCModel(object):
         outer = tf.matrix_band_part(outer, 0, -1)
         self.yp1 = tf.argmax(tf.reduce_max(outer, axis=2), axis=1)
         self.yp2 = tf.argmax(tf.reduce_max(outer, axis=1), axis=1)
+
+    '''
+    def get_prio_probs(self):
+        with tf.variable_scope("prio_probs"):
+            sim = tf.matmul(self.p_emb, self.q_emb, transpose_b=True)
+            sim = tf.nn.softmax(sim, -1)#[batch, p_len, q_len]
+            output = tf.reduce_max(self.sim, -1) #[batch, p_len]
+            output = tf.expand_dims(tf.sigmoid(output), -1) #[batch, p_len, 1]
+            w = tf.constant([0, 0, 1, 0.8, 0.6], shape=[5, 1, 1], dtype=tf.float32)
+            probs = tf.nn.conv1d(output, w, stride=1, padding="SAME") #[batch, p_len, 1]
+            probs = tf.nn.softmax(tf.squeeze(probs, 2), -1)
+            return probs
+    '''
+
     def _decode(self):
 
         with tf.variable_scope("Output_Layer"):
@@ -330,6 +344,18 @@ class RCModel(object):
                            cnn_layer.mask_logits(end_logits, mask=p_mask)]
 
             self.start_probs, self.end_probs = [l for l in self.logits]
+
+            self.norm_p_emb = self.p_emb / tf.sqrt(tf.reduce_sum(self.p_emb*self.p_emb, -1, keep_dims=True))
+            self.norm_q_emb = self.q_emb / tf.sqrt(tf.reduce_sum(self.q_emb*self.q_emb, -1, keep_dims=True))
+
+            self.sim = tf.matmul(self.norm_p_emb, self.norm_p_emb, transpose_b=True)
+
+            output = tf.reduce_max(self.sim, -1)  # [batch, p_len]
+            output = tf.expand_dims(tf.sigmoid(output), -1)  # [batch, p_len, 1]
+            w = tf.constant([0, 0, 1, 0.8, 0.6], shape=[5, 1, 1], dtype=tf.float32)
+            probs = tf.nn.conv1d(output, w, stride=1, padding="SAME")  # [batch, p_len, 1]
+            self.prio_probs = tf.nn.softmax(tf.squeeze(probs, 2), -1)
+
             self.start_probs = tf.nn.softmax(self.start_probs, -1)
             self.end_probs = tf.nn.softmax(self.end_probs, -1)
             

@@ -174,8 +174,10 @@ def train(args):
     logger.info('Load data_set and vocab...')
     with open(os.path.join(args.vocab_dir, 'word_vocab.data'), 'rb') as fin:
         word_vocab = pickle.load(fin)
+    print("load word dict finished")
     with open(os.path.join(args.vocab_dir, 'char_vocab.data'), 'rb') as fin:
         char_vocab = pickle.load(fin)
+    print("load char dict finished")
     brc_data = BRCDataset(args.max_p_num, args.max_p_len, args.max_q_len,
                           args.train_files, args.dev_files)
     logger.info('Converting text into ids...')
